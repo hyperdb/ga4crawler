@@ -5,6 +5,7 @@ export interface Env {
     GA4_CLIENT_EMAIL: string;
     GA4_PRIVATE_KEY: string;
     SITES_CONFIG: string;
+    ALLOWED_ORIGINS?: string;
     DB: D1Database;
 }
 
@@ -31,18 +32,19 @@ export default {
     // HTTPリクエストのハンドラー
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
+        const allowedOrigins = parseAllowedOrigins(env.ALLOWED_ORIGINS);
 
         if (request.method === 'OPTIONS') {
-            return handleCorsPreflightResponse();
+            return handleCorsPreflightResponse(request, allowedOrigins);
         }
 
         // 1. 手動バッチ実行エンドポイント (POST /run)
         if (url.pathname === '/run' && request.method === 'POST') {
             try {
                 const results = await handleAggregate(env);
-                return createCorsResponse({ success: true, results });
+                return createCorsResponse(request, allowedOrigins, { success: true, results });
             } catch (error: any) {
-                return createCorsResponse({ success: false, error: error.message }, 500);
+                return createCorsResponse(request, allowedOrigins, { success: false, error: error.message }, 500);
             }
         }
 
@@ -75,13 +77,13 @@ export default {
 
                 const { results } = await env.DB.prepare(query).bind(...params).all();
 
-                return createCorsResponse({ success: true, data: results });
+                return createCorsResponse(request, allowedOrigins, { success: true, data: results });
             } catch (error: any) {
-                return createCorsResponse({ success: false, error: error.message }, 500);
+                return createCorsResponse(request, allowedOrigins, { success: false, error: error.message }, 500);
             }
         }
 
-        return createCorsResponse({ message: 'GA4 Crawler Worker is running.' }, 200);
+        return createCorsResponse(request, allowedOrigins, { message: 'GA4 Crawler Worker is running.' }, 200);
     },
 };
 
@@ -164,21 +166,54 @@ function extractMetrics(responseJson: any) {
     };
 }
 
-function getCorsHeaders() {
-    return {
-        'Access-Control-Allow-Origin': '*',
+function parseAllowedOrigins(allowedOrigins?: string): string[] {
+    if (!allowedOrigins) {
+        return [];
+    }
+    return allowedOrigins
+        .split(',')
+        .map((origin) => origin.trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+}
+
+function getCorsHeaders(request: Request, allowedOrigins: string[]): Record<string, string> {
+    const origin = request.headers.get('Origin');
+    const headers: Record<string, string> = {
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Vary': 'Origin',
     };
+
+    if (origin && allowedOrigins.includes(origin)) {
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers['Access-Control-Allow-Credentials'] = 'true';
+    }
+
+    return headers;
 }
 
-function handleCorsPreflightResponse(): Response {
-    return new Response(null, { status: 204, headers: getCorsHeaders() });
+function handleCorsPreflightResponse(request: Request, allowedOrigins: string[]): Response {
+    const origin = request.headers.get('Origin');
+    if (origin && !allowedOrigins.includes(origin)) {
+        return new Response(null, { status: 403 });
+    }
+    return new Response(null, {
+        status: 204,
+        headers: {
+            ...getCorsHeaders(request, allowedOrigins),
+            'Access-Control-Max-Age': '86400',
+        },
+    });
 }
 
-function createCorsResponse(data: any, status = 200): Response {
+function createCorsResponse(
+    request: Request,
+    allowedOrigins: string[],
+    data: any,
+    status = 200
+): Response {
     return Response.json(data, {
         status,
-        headers: { ...getCorsHeaders(), 'Content-Type': 'application/json' },
+        headers: { ...getCorsHeaders(request, allowedOrigins), 'Content-Type': 'application/json' },
     });
 }

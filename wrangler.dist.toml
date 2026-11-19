@@ -9,6 +9,8 @@ crons = ["0 18 * * *"]
 [vars]
 # 監視対象のサイト一覧（複数の場合はカンマ区切りで並べる）
 SITES_CONFIG = '[{"name": "site name", "propertyId": "property id"}]'
+# CORS許可オリジン（複数の場合はカンマ区切りで並べる）
+ALLOWED_ORIGINS = "http://localhost:5173,https://example.com"
 
 # D1 データベースのバインド設定
 [[d1_databases]]
